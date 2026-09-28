@@ -21,7 +21,7 @@ The input must be a single-image, single-band GeoTIFF with signed 8-, 16-, 32-, 
 Arguments:
 
 - `<INPUT>` is the source GeoTIFF DEM.
-- `<OUTPUT>` is the heightmap file to create. Its parent directory must already exist.
+- `<OUTPUT>` is the gzip-compressed heightmap file to create. Use the `.hmz` extension; its parent directory must already exist.
 
 Options:
 
@@ -35,28 +35,28 @@ Rotation is applied first. Flips are then applied in output coordinates, so they
 
 ### Panama DEM
 
-From the repository root, this exact command reads `../dem/Pma_DEM_30m.tif`, rotates it 90 degrees clockwise, flips the rotated image vertically, and writes `../var/pandemokh.hm`:
+From the repository root, this exact command reads `../dem/Pma_DEM_30m.tif`, rotates it 90 degrees clockwise, flips the rotated image vertically, and writes `../var/pandemokh.hmz`:
 
 ```sh
-cargo run --release -- --rotate 90 --flip-vertical ../dem/Pma_DEM_30m.tif ../var/pandemokh.hm
+cargo run --release -- --rotate 90 --flip-vertical ../dem/Pma_DEM_30m.tif ../var/pandemokh.hmz
 ```
 
 The `../var` directory must exist before running the command.
 
-The converter scans the TIFF once to find valid minimum and maximum elevations, then decodes and writes one TIFF strip or tile at a time. It does not load the complete raster into memory.
+The converter scans the TIFF once to find valid minimum and maximum elevations, then decodes and transforms one TIFF strip or tile at a time into a temporary payload. It finally streams that payload through gzip into the output file. It does not load the complete raster into memory.
 
 ## Heightmap format, version 1
 
-The output is a header followed immediately by one `int32` for every output pixel:
+The output is a raw 12-byte header followed immediately by one gzip member containing an `int32` for every output pixel:
 
 | Byte offset | Type | Meaning |
 | ---: | --- | --- |
 | 0 | `int32` | Magic value `0x0108AAFF` |
 | 4 | `int32` | Height in rows |
 | 8 | `int32` | Width in columns |
-| 12 | `int32[]` | `height * width` normalized pixels |
+| 12 | gzip stream | `height * width` normalized `int32` pixels |
 
-Every integer uses **little-endian** byte order. Thus, the first four bytes are `FF AA 08 01`. Both Apple Silicon and common AMD64 computers are little-endian, and Go can decode the format portably with `encoding/binary.LittleEndian`.
+Every integer in both the raw header and decompressed payload uses **little-endian** byte order. Thus, the first four bytes are `FF AA 08 01`. The gzip stream starts at byte 12 with bytes `1F 8B`. Go can decode the payload with its standard `compress/gzip` package and decode the integers portably with `encoding/binary.LittleEndian`.
 
 Pixel data is **row-major**, with each row written left-to-right from the top of the raster. Pixel `(x, y)` is stored at sample index:
 
@@ -70,11 +70,13 @@ Valid elevations are linearly normalized to `0..2147483647`:
 round((elevation - min) * 2147483647 / (max - min))
 ```
 
-The reserved value `-2147483648` marks a no-data pixel. Version 1 has no padding or trailer, so its exact size is:
+The reserved value `-2147483648` marks a no-data pixel. The decompressed gzip payload has no padding or trailer, so its exact size is:
 
 ```text
-12 + height * width * 4 bytes
+height * width * 4 bytes
 ```
+
+The complete file size depends on the gzip compression ratio. The gzip header uses a zero modification time, making repeated conversions of identical input deterministic.
 
 If every valid pixel has the same elevation, all valid pixels are written as `0` because the normalization span is zero.
 

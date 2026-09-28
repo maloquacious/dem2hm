@@ -136,6 +136,7 @@ name = "dem2hm"
 version = "0.1.0"
 dependencies = [
  "clap",
+ "flate2",
  "tempfile",
  "tiff",
 ]

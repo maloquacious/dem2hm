@@ -10,18 +10,18 @@ The current Go reader is an incomplete implementation fragment and is not expect
 
 ## Heightmap binary contract
 
-The output format is version 1 and has no padding:
+The output format is version 1. It has a raw header followed by a gzip-compressed payload:
 
 | Byte offset | Type | Meaning |
 | ---: | --- | --- |
 | 0 | `int32` | Magic value `0x0108AAFF` |
 | 4 | `int32` | Raster height (number of rows) |
 | 8 | `int32` | Raster width (number of columns) |
-| 12 | `height * width` × `int32` | Pixel values |
+| 12 | gzip stream | `height * width` × `int32` pixel values after decompression |
 
-All integers are **little-endian two's-complement values**. The magic value therefore appears on disk as bytes `FF AA 08 01`. Little-endian is the native byte order of both Apple Silicon/ARM64 Macs and mainstream AMD64 machines, but readers and writers must still request little-endian explicitly rather than relying on host byte order.
+All integers in the raw header and decompressed payload are **little-endian two's-complement values**. The magic value therefore appears on disk as bytes `FF AA 08 01`. The gzip stream begins at byte 12 with bytes `1F 8B`. Little-endian is the native byte order of both Apple Silicon/ARM64 Macs and mainstream AMD64 machines, but readers and writers must still request little-endian explicitly rather than relying on host byte order.
 
-Pixels are **row-major**: write the top row from left to right, followed by each successive row. Pixel `(x, y)` is sample index `y * width + x` after the three-word header.
+Decompressed pixels are **row-major**: write the top row from left to right, followed by each successive row. Pixel `(x, y)` is decompressed sample index `y * width + x`.
 
 Normalize valid elevations linearly into the inclusive signed-positive range `0..=i32::MAX`:
 
@@ -32,7 +32,7 @@ normalized = round((elevation - minimum_valid_elevation) * i32::MAX
 
 Write `i32::MIN` (`-2147483648`) for a declared no-data pixel. This sentinel is outside the valid normalized range. Define and test sensible behavior for a constant-elevation DEM, where the normalization span is zero.
 
-The complete file size must be exactly `12 + height * width * 4` bytes. Do not add row padding, metadata, checksums, or trailers to version 1. Reject dimensions that cannot be represented by positive `int32` values or whose size arithmetic overflows.
+The decompressed payload size must be exactly `height * width * 4` bytes, with no row padding, metadata, or trailing decompressed data. The complete file size varies with compression. Use one gzip member with a zero modification time so output is deterministic; its standard CRC and size trailer are required. Reject dimensions that cannot be represented by positive `int32` values or whose decompressed size arithmetic overflows.
 
 ## Implementation expectations
 

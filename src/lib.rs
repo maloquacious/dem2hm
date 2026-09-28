@@ -1,10 +1,11 @@
 use std::error::Error;
 use std::fmt::{self, Display};
 use std::fs::File;
-use std::io::{BufReader, BufWriter, Seek, SeekFrom, Write};
+use std::io::{self, BufReader, BufWriter, Seek, SeekFrom, Write};
 use std::path::Path;
 
 use clap::ValueEnum;
+use flate2::{Compression, GzBuilder};
 use tiff::ColorType;
 use tiff::decoder::{ChunkType, Decoder, DecodingResult};
 use tiff::tags::Tag;
@@ -89,6 +90,34 @@ struct RasterInfo {
 pub fn convert(input: &Path, output: &Path, transform: Transform) -> Result<()> {
     let (info, minimum, maximum) = inspect_raster(input)?;
     let (output_width, output_height) = validate_dimensions(info.width, info.height, transform)?;
+    let payload_size = decoded_payload_size(output_width, output_height)?;
+    let mut scratch = tempfile::tempfile()?;
+    scratch.set_len(payload_size)?;
+
+    let input_file = File::open(input)?;
+    let mut decoder = Decoder::new(BufReader::new(input_file))?;
+    {
+        let mut scratch_writer = BufWriter::new(&mut scratch);
+        for chunk_index in 0..info.chunk_count {
+            let values = signed_values(decoder.read_chunk(chunk_index)?)?;
+            let (chunk_width, chunk_height) = decoder.chunk_data_dimensions(chunk_index);
+            let (chunk_x, chunk_y) = chunk_origin(&info, chunk_index);
+            write_transformed_chunk(
+                &mut scratch_writer,
+                &values,
+                chunk_x,
+                chunk_y,
+                chunk_width,
+                chunk_height,
+                &info,
+                transform,
+                minimum,
+                maximum,
+            )?;
+        }
+        scratch_writer.flush()?;
+    }
+    scratch.seek(SeekFrom::Start(0))?;
 
     let output_file = File::create(output).map_err(|source| {
         error(format!(
@@ -96,31 +125,17 @@ pub fn convert(input: &Path, output: &Path, transform: Transform) -> Result<()> 
             output.display()
         ))
     })?;
-    let file_size = encoded_file_size(output_width, output_height)?;
-    output_file.set_len(file_size)?;
-    let mut writer = BufWriter::new(output_file);
-    write_header(&mut writer, output_width, output_height)?;
-
-    let input_file = File::open(input)?;
-    let mut decoder = Decoder::new(BufReader::new(input_file))?;
-    for chunk_index in 0..info.chunk_count {
-        let values = signed_values(decoder.read_chunk(chunk_index)?)?;
-        let (chunk_width, chunk_height) = decoder.chunk_data_dimensions(chunk_index);
-        let (chunk_x, chunk_y) = chunk_origin(&info, chunk_index);
-        write_transformed_chunk(
-            &mut writer,
-            &values,
-            chunk_x,
-            chunk_y,
-            chunk_width,
-            chunk_height,
-            &info,
-            transform,
-            minimum,
-            maximum,
-        )?;
+    let mut output_writer = BufWriter::new(output_file);
+    write_header(&mut output_writer, output_width, output_height)?;
+    let mut gzip_writer = GzBuilder::new()
+        .mtime(0)
+        .write(output_writer, Compression::default());
+    let bytes_written = io::copy(&mut scratch, &mut gzip_writer)?;
+    if bytes_written != payload_size {
+        return Err(error("temporary payload was truncated before compression"));
     }
-    writer.flush()?;
+    output_writer = gzip_writer.finish()?;
+    output_writer.flush()?;
     Ok(())
 }
 
@@ -230,16 +245,15 @@ fn validate_dimensions(width: u32, height: u32, transform: Transform) -> Result<
     if output_width > i32::MAX as u32 || output_height > i32::MAX as u32 {
         return Err(error("raster dimensions exceed positive int32 range"));
     }
-    encoded_file_size(output_width, output_height)?;
+    decoded_payload_size(output_width, output_height)?;
     Ok((output_width, output_height))
 }
 
-fn encoded_file_size(width: u32, height: u32) -> Result<u64> {
+fn decoded_payload_size(width: u32, height: u32) -> Result<u64> {
     u64::from(width)
         .checked_mul(u64::from(height))
         .and_then(|pixels| pixels.checked_mul(4))
-        .and_then(|payload| payload.checked_add(12))
-        .ok_or_else(|| error("encoded heightmap size overflows u64"))
+        .ok_or_else(|| error("decoded heightmap payload size overflows u64"))
 }
 
 fn write_header<W: Write>(writer: &mut W, width: u32, height: u32) -> Result<()> {
@@ -337,12 +351,8 @@ fn write_mapped_line<W: Write + Seek>(
     let output_x = first_x.min(last_x);
     let (output_width, _) = transform.output_dimensions(info.width, info.height);
     let sample_index = u64::from(first_y) * u64::from(output_width) + u64::from(output_x);
-    let byte_offset = 12_u64
-        .checked_add(
-            sample_index
-                .checked_mul(4)
-                .ok_or_else(|| error("output offset overflow"))?,
-        )
+    let byte_offset = sample_index
+        .checked_mul(4)
         .ok_or_else(|| error("output offset overflow"))?;
     writer.seek(SeekFrom::Start(byte_offset))?;
     for value in values {
@@ -374,6 +384,7 @@ fn normalize(value: i64, no_data: Option<i64>, minimum: i64, maximum: i64) -> i3
 #[cfg(test)]
 mod tests {
     use super::*;
+    use flate2::read::GzDecoder;
     use std::fs;
     use std::io::{Cursor, Read};
     use tempfile::tempdir;
@@ -395,13 +406,23 @@ mod tests {
     fn read_heightmap(path: &Path) -> (i32, i32, i32, Vec<i32>) {
         let mut bytes = Vec::new();
         File::open(path).unwrap().read_to_end(&mut bytes).unwrap();
-        let (word_bytes, remainder) = bytes.as_chunks::<4>();
+        let header: [u8; 12] = bytes[..12].try_into().unwrap();
+        let mut payload = Vec::new();
+        GzDecoder::new(&bytes[12..])
+            .read_to_end(&mut payload)
+            .unwrap();
+        let (word_bytes, remainder) = payload.as_chunks::<4>();
         assert!(remainder.is_empty());
         let words: Vec<i32> = word_bytes
             .iter()
             .map(|bytes| i32::from_le_bytes(*bytes))
             .collect();
-        (words[0], words[1], words[2], words[3..].to_vec())
+        (
+            i32::from_le_bytes(header[0..4].try_into().unwrap()),
+            i32::from_le_bytes(header[4..8].try_into().unwrap()),
+            i32::from_le_bytes(header[8..12].try_into().unwrap()),
+            words,
+        )
     }
 
     #[test]
@@ -429,7 +450,8 @@ mod tests {
                 ]
             )
         );
-        assert_eq!(fs::metadata(output).unwrap().len(), 12 + 3 * 2 * 4);
+        let output_bytes = fs::read(output).unwrap();
+        assert_eq!(&output_bytes[12..14], &[0x1f, 0x8b]);
     }
 
     #[test]
@@ -525,7 +547,7 @@ mod tests {
     fn rejects_dimensions_and_size_overflow() {
         assert!(validate_dimensions(0, 1, Transform::default()).is_err());
         assert!(validate_dimensions(i32::MAX as u32 + 1, 1, Transform::default()).is_err());
-        assert!(encoded_file_size(u32::MAX, u32::MAX).is_err());
+        assert!(decoded_payload_size(u32::MAX, u32::MAX).is_err());
     }
 
     #[test]
@@ -564,5 +586,19 @@ mod tests {
 
         assert!(convert(&input, &output, Transform::default()).is_err());
         assert!(!output.exists());
+    }
+
+    #[test]
+    fn gzip_output_is_deterministic() {
+        let directory = tempdir().unwrap();
+        let input = directory.path().join("small.tif");
+        let first = directory.path().join("first.hm");
+        let second = directory.path().join("second.hm");
+        write_fixture(&input, 3, 2, &[0, 10, -999, 20, 30, 40], -999);
+
+        convert(&input, &first, Transform::default()).unwrap();
+        convert(&input, &second, Transform::default()).unwrap();
+
+        assert_eq!(fs::read(first).unwrap(), fs::read(second).unwrap());
     }
 }
