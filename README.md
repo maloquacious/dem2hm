@@ -84,26 +84,19 @@ If every valid pixel has the same elevation, all valid pixels are written as `0`
 
 ## Go module
 
-This repository includes the Go module `github.com/maloquacious/dem2hm`, which will provide the canonical heightmap reader so applications do not need to implement and test their own decoder. The reader is currently incomplete and does not compile; its API and behavior are not stable yet. It will be completed and tested before version 1 is published.
+This repository includes the Go module `github.com/maloquacious/dem2hm`, which provides the canonical heightmap reader so applications do not need to implement and test their own decoder. `Read` accepts an `io.Reader`, validates the complete version 1 stream, and returns pixels in a flat row-major `[]int32`. `Pixel` provides bounds-checked access with an error, `At` is a fast path that panics on out-of-bounds coordinates, and `Row` returns a bounds-checked view into the heightmap's backing data.
 
-## Reading the header in Go
+## Reading a heightmap in Go
 
 ```go
-var magic, height, width int32
-
-if err := binary.Read(r, binary.LittleEndian, &magic); err != nil {
+heightmap, err := dem2hm.Read(r)
+if err != nil {
 	return err
 }
-if magic != 0x0108AAFF {
-	return fmt.Errorf("invalid heightmap byte order or format: %#x", magic)
-}
-if err := binary.Read(r, binary.LittleEndian, &height); err != nil {
-	return err
-}
-if err := binary.Read(r, binary.LittleEndian, &width); err != nil {
-	return err
-}
+elevation, err := heightmap.Pixel(x, y)
 ```
+
+Malformed-input and bounds errors wrap exported constant errors, allowing callers to use `errors.Is` while retaining a detailed error message.
 
 The intended upstream repository is <https://github.com/maloquacious/dem2hm>.
 
