@@ -2,9 +2,11 @@
 
 ## Purpose
 
-Build a Rust command-line program that reads a digital elevation model (DEM), initially a single-band signed-integer GeoTIFF, and writes a compact heightmap that Go programs can load without a GIS dependency.
+Build a Rust command-line program that reads a digital elevation model (DEM), initially a single-band signed-integer GeoTIFF, and writes a compact heightmap that programs can load without a GIS dependency. Maintain a Go module in this repository that provides the canonical reader so downstream teams do not need to implement and test their own.
 
 Keep the conversion deterministic and streaming or bounded-memory where practical. Preserve the DEM's raster orientation unless an explicit CLI option requests a transformation. Treat declared no-data pixels separately from valid elevations.
+
+The current Go reader is an incomplete implementation fragment and is not expected to compile yet. Complete and test it before publishing version 1; do not treat its present API or behavior as stable until then.
 
 ## Heightmap binary contract
 
@@ -39,7 +41,18 @@ The complete file size must be exactly `12 + height * width * 4` bytes. Do not a
 - Validate that the input has one supported elevation band and report unsupported sample formats clearly.
 - Use checked integer arithmetic for dimensions, offsets, and normalization intermediates. Use a sufficiently wide intermediate representation to avoid overflow.
 - Write tests that inspect exact bytes for the header, asymmetric raster dimensions, row-major ordering, normalization endpoints and rounding, no-data handling, malformed input, and overflow boundaries.
+- Keep the Go reader aligned with the binary contract above. Before version 1 is published, it must compile and have tests covering valid files, malformed headers and dimensions, truncated or oversized payloads, row-major indexing, and the no-data sentinel.
+- Keep the semantic version in `version.go` synchronized with the Rust package version in `Cargo.toml`. Verify this before every code commit, and include both files in any commit that changes the version.
 - Document the CLI and exact binary format in `README.md`; update both this file and the README if the format changes.
 - Before finishing a change, run `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, and `cargo test`.
+- Once the Go reader is complete, run `gofmt` on changed Go files and `go test ./...` before finishing changes to the Go module.
+
+## GitHub workflow
+
+- Commit routine work directly to `main` unless the work is associated with a GitHub issue.
+- For issue-driven work, assign the issue to `@me`, create a branch, and open a pull request instead of committing directly to `main`.
+- Assign every pull request to `@me`.
+- Reference the relevant issue number in commit messages for issue-driven work.
+- You are authorized to push commits and issue branches to the remote after all required tests pass. Do not push when any required test is failing.
 
 The intended upstream repository is `https://github.com/maloquacious/dem2hm.git`.

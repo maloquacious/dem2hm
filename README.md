@@ -39,6 +39,10 @@ The reserved value `-2147483648` marks a no-data pixel. Version 1 has no padding
 12 + height * width * 4 bytes
 ```
 
+## Go module
+
+This repository includes the Go module `github.com/maloquacious/dem2hm`, which will provide the canonical heightmap reader so applications do not need to implement and test their own decoder. The reader is currently incomplete and does not compile; its API and behavior are not stable yet. It will be completed and tested before version 1 is published.
+
 ## Reading the header in Go
 
 ```go
@@ -59,3 +63,8 @@ if err := binary.Read(r, binary.LittleEndian, &width); err != nil {
 ```
 
 The intended upstream repository is <https://github.com/maloquacious/dem2hm>.
+
+## Authors
+
+- Michael D. Henderson
+- [Amp](https://ampcode.com)
