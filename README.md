@@ -98,6 +98,25 @@ elevation, err := heightmap.Pixel(x, y)
 
 Malformed-input and bounds errors wrap exported constant errors, allowing callers to use `errors.Is` while retaining a detailed error message.
 
+### Malicious inputs
+
+`compress/gzip` validates stream structure, CRC, and decompressed size, but it does not impose decompressed-size, compression-ratio, CPU-time, or elapsed-time limits. `Read` validates dimensions and reads exactly the declared payload, but its unrestricted API assumes the input is trusted because declared dimensions determine the final `[]int32` allocation.
+
+Applications accepting untrusted files should call `ReadWithOptions`, set `MaxPixels` to an application-appropriate allocation ceiling, and pass the request or operation context:
+
+```go
+heightmap, err := dem2hm.ReadWithOptions(r, dem2hm.Options{
+	Context:   req.Context(),
+	MaxPixels: 100_000_000,
+})
+```
+
+The context is checked during header and compressed-stream reads. As with all APIs built on `io.Reader`, cancellation cannot interrupt a reader already blocked inside its `Read` method unless that source also supports cancellation, deadlines, or closure. HTTP handlers should use the request context, wrap the request body with `http.MaxBytesReader` to cap compressed input, and retain the server's normal timeout limits. Non-HTTP callers should apply an equivalent input-byte limit when the source is untrusted.
+
+## Input trust
+
+The Rust converter is intended only for trusted TIFF inputs. It validates the TIFF structure and supported sample format, but it is not a sandbox and does not impose security-oriented file-size, memory, CPU, or elapsed-time limits. Do not expose the converter directly to untrusted uploads without enforcing those limits outside the process.
+
 The intended upstream repository is <https://github.com/maloquacious/dem2hm>.
 
 ## Authors

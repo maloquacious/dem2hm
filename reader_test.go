@@ -5,9 +5,11 @@ package dem2hm
 import (
 	"bytes"
 	"compress/gzip"
+	"context"
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"io"
 	"math"
 	"reflect"
 	"testing"
@@ -56,6 +58,36 @@ func TestReadAcrossDecodeBufferBoundary(t *testing.T) {
 	}
 	if !reflect.DeepEqual(hm.Data, values) {
 		t.Fatal("Data differs across decode buffer boundary")
+	}
+}
+
+func TestReadWithOptionsRejectsPixelLimit(t *testing.T) {
+	input := heightmapFixture(t, 2, 3, []int32{0, 1, 2, 3, 4, 5})
+
+	_, err := ReadWithOptions(bytes.NewReader(input), Options{MaxPixels: 5})
+	if !errors.Is(err, ErrLimitExceeded) {
+		t.Fatalf("ReadWithOptions error = %v, want ErrLimitExceeded", err)
+	}
+}
+
+func TestReadWithOptionsHonorsCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, err := ReadWithOptions(bytes.NewReader(nil), Options{Context: ctx})
+	if !errors.Is(err, ErrCanceled) || !errors.Is(err, context.Canceled) {
+		t.Fatalf("ReadWithOptions error = %v, want ErrCanceled and context.Canceled", err)
+	}
+}
+
+func TestReadWithOptionsHonorsCancellationDuringRead(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	input := heightmapFixture(t, 1, 1, []int32{7})
+	reader := &cancelingReader{reader: bytes.NewReader(input), cancel: cancel}
+
+	_, err := ReadWithOptions(reader, Options{Context: ctx})
+	if !errors.Is(err, ErrCanceled) || !errors.Is(err, context.Canceled) {
+		t.Fatalf("ReadWithOptions error = %v, want ErrCanceled and context.Canceled", err)
 	}
 }
 
@@ -176,4 +208,19 @@ func gzipFixture(t *testing.T, values []int32) []byte {
 		t.Fatalf("close gzip fixture: %v", err)
 	}
 	return data.Bytes()
+}
+
+type cancelingReader struct {
+	reader   io.Reader
+	cancel   context.CancelFunc
+	canceled bool
+}
+
+func (r *cancelingReader) Read(buffer []byte) (int, error) {
+	n, err := r.reader.Read(buffer)
+	if !r.canceled {
+		r.canceled = true
+		r.cancel()
+	}
+	return n, err
 }

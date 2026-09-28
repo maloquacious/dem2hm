@@ -6,6 +6,7 @@ package dem2hm
 import (
 	"bufio"
 	"compress/gzip"
+	"context"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -40,7 +41,23 @@ const (
 	ErrTrailingData = Error("trailing heightmap data")
 	// ErrOutOfBounds indicates that a requested pixel or row is outside the map.
 	ErrOutOfBounds = Error("heightmap coordinates out of bounds")
+	// ErrLimitExceeded indicates that the heightmap exceeds a configured limit.
+	ErrLimitExceeded = Error("heightmap resource limit exceeded")
+	// ErrCanceled indicates that reading was canceled or its deadline expired.
+	ErrCanceled = Error("heightmap read canceled")
 )
+
+// Options controls resource use while reading a heightmap.
+type Options struct {
+	// Context is checked while reading and decoding. A nil Context is treated
+	// as context.Background(). Cancellation cannot interrupt an underlying
+	// io.Reader blocked in Read unless that reader also honors cancellation,
+	// deadlines, or closure.
+	Context context.Context
+	// MaxPixels is the largest decoded heightmap to accept. Zero disables the
+	// additional limit; format and address-space limits still apply.
+	MaxPixels uint64
+}
 
 // HeightMap is a normalized raster stored in top-to-bottom row-major order.
 type HeightMap struct {
@@ -93,11 +110,29 @@ func (hm *HeightMap) Row(y int) ([]int32, error) {
 	return hm.Data[start:end], nil
 }
 
-// Read reads a version 1 heightmap from r.
+// Read reads a version 1 heightmap from r without an application-defined
+// resource limit or cancellation context.
 func Read(r io.Reader) (*HeightMap, error) {
+	return ReadWithOptions(r, Options{})
+}
+
+// ReadWithOptions reads a version 1 heightmap from r using options.
+func ReadWithOptions(r io.Reader, options Options) (*HeightMap, error) {
+	ctx := options.Context
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := contextError(ctx.Err()); err != nil {
+		return nil, err
+	}
+	r = contextReader{context: ctx, reader: r}
+
 	var header [headerSize]byte
 	n, err := io.ReadFull(r, header[:])
 	if err != nil {
+		if canceled := contextError(err); canceled != nil {
+			return nil, canceled
+		}
 		return nil, fmt.Errorf("%w: read %d of %d bytes: %w", ErrInvalidHeader, n, headerSize, err)
 	}
 
@@ -107,7 +142,7 @@ func Read(r io.Reader) (*HeightMap, error) {
 	}
 	height := int32(binary.LittleEndian.Uint32(header[4:8]))
 	width := int32(binary.LittleEndian.Uint32(header[8:12]))
-	pixelCount, err := checkedPixelCount(height, width)
+	pixelCount, err := checkedPixelCount(height, width, options.MaxPixels)
 	if err != nil {
 		return nil, err
 	}
@@ -115,6 +150,9 @@ func Read(r io.Reader) (*HeightMap, error) {
 	buffered := bufio.NewReader(r)
 	compressed, err := gzip.NewReader(buffered)
 	if err != nil {
+		if canceled := contextError(err); canceled != nil {
+			return nil, canceled
+		}
 		return nil, fmt.Errorf("open payload after byte %d: %w: %w", headerSize, ErrInvalidGzip, err)
 	}
 	compressed.Multistream(false)
@@ -131,7 +169,14 @@ func Read(r io.Reader) (*HeightMap, error) {
 		n, readErr := io.ReadFull(compressed, batch)
 		if readErr != nil {
 			_ = compressed.Close()
+			if canceled := contextError(readErr); canceled != nil {
+				return nil, canceled
+			}
 			return nil, fmt.Errorf("pixels %d..%d of %d: read %d of %d bytes: %w: %w", first, first+batchPixels-1, pixelCount, n, len(batch), ErrInvalidPayload, readErr)
+		}
+		if canceled := contextError(ctx.Err()); canceled != nil {
+			_ = compressed.Close()
+			return nil, canceled
 		}
 		for offset := 0; offset < batchPixels; offset++ {
 			value := int32(binary.LittleEndian.Uint32(batch[offset*4 : offset*4+4]))
@@ -152,6 +197,9 @@ func Read(r io.Reader) (*HeightMap, error) {
 	}
 	if !errors.Is(readErr, io.EOF) {
 		_ = compressed.Close()
+		if canceled := contextError(readErr); canceled != nil {
+			return nil, canceled
+		}
 		return nil, fmt.Errorf("verify gzip checksum and size: %w: %w", ErrInvalidGzip, readErr)
 	}
 	if err := compressed.Close(); err != nil {
@@ -160,9 +208,15 @@ func Read(r io.Reader) (*HeightMap, error) {
 
 	first, err := buffered.ReadByte()
 	if errors.Is(err, io.EOF) {
+		if canceled := contextError(ctx.Err()); canceled != nil {
+			return nil, canceled
+		}
 		return hm, nil
 	}
 	if err != nil {
+		if canceled := contextError(err); canceled != nil {
+			return nil, canceled
+		}
 		return nil, fmt.Errorf("check for data after gzip member: %w: %w", ErrTrailingData, err)
 	}
 	second, secondErr := buffered.ReadByte()
@@ -170,19 +224,48 @@ func Read(r io.Reader) (*HeightMap, error) {
 		return nil, fmt.Errorf("gzip member starts immediately after the first: %w", ErrMultipleGzipMembers)
 	}
 	if secondErr != nil && !errors.Is(secondErr, io.EOF) {
+		if canceled := contextError(secondErr); canceled != nil {
+			return nil, canceled
+		}
 		return nil, fmt.Errorf("check for data after gzip member: %w: %w", ErrTrailingData, secondErr)
 	}
 	return nil, fmt.Errorf("first trailing byte is %#02x: %w", first, ErrTrailingData)
 }
 
-func checkedPixelCount(height, width int32) (int, error) {
+func checkedPixelCount(height, width int32, maxPixels uint64) (int, error) {
 	if height <= 0 || width <= 0 {
 		return 0, fmt.Errorf("height %d and width %d must both be positive: %w", height, width, ErrInvalidDimensions)
 	}
 	pixels := uint64(height) * uint64(width)
+	if maxPixels != 0 && pixels > maxPixels {
+		return 0, fmt.Errorf("height %d by width %d is %d pixels, exceeding the configured limit of %d: %w", height, width, pixels, maxPixels, ErrLimitExceeded)
+	}
 	maxInt := uint64(^uint(0) >> 1)
 	if pixels > maxInt/4 {
 		return 0, fmt.Errorf("height %d by width %d exceeds the addressable payload size: %w", height, width, ErrInvalidDimensions)
 	}
 	return int(pixels), nil
+}
+
+type contextReader struct {
+	context context.Context
+	reader  io.Reader
+}
+
+func (r contextReader) Read(buffer []byte) (int, error) {
+	if err := r.context.Err(); err != nil {
+		return 0, err
+	}
+	n, err := r.reader.Read(buffer)
+	if err == nil {
+		err = r.context.Err()
+	}
+	return n, err
+}
+
+func contextError(err error) error {
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return fmt.Errorf("%w: %w", ErrCanceled, err)
+	}
+	return nil
 }
