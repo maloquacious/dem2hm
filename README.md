@@ -1,12 +1,31 @@
 # dem2hm
 
-`dem2hm` will convert a digital elevation model (DEM) into a normalized integer heightmap designed for direct use by Go programs.
+`dem2hm` converts a digital elevation model (DEM) into a normalized integer heightmap designed for direct use by Go programs.
 
-The Rust application has been scaffolded, but the converter is not implemented yet.
+## Usage
 
-## Planned input
+```text
+dem2hm [OPTIONS] <INPUT> <OUTPUT>
+```
 
-The initial implementation will read a single-band signed-integer GeoTIFF DEM, including its declared no-data value. The first development fixture is the Panama 30 m DEM in `../dem/Pma_DEM_30m.tif`.
+The input must be a single-image, single-band GeoTIFF with signed 8-, 16-, 32-, or 64-bit integer samples. If the GeoTIFF declares a `GDAL_NODATA` value, those pixels are encoded with the heightmap no-data sentinel and excluded when finding the normalization range.
+
+Options:
+
+- `--rotate <0|90|180|270>` rotates clockwise. The default is `0`.
+- `--flip-horizontal` flips the rotated raster left-to-right.
+- `--flip-vertical` flips the rotated raster top-to-bottom.
+
+Rotation is applied first. Flips are then applied in output coordinates, so they always describe the final image's horizontal and vertical axes.
+
+For example:
+
+```sh
+cargo run --release -- ../dem/Pma_DEM_30m.tif ../var/Pma_DEM_30m.hm
+cargo run --release -- --rotate 90 --flip-horizontal input.tif output.hm
+```
+
+The converter scans the TIFF once to find valid minimum and maximum elevations, then decodes and writes one TIFF strip or tile at a time. It does not load the complete raster into memory.
 
 ## Heightmap format, version 1
 
@@ -38,6 +57,8 @@ The reserved value `-2147483648` marks a no-data pixel. Version 1 has no padding
 ```text
 12 + height * width * 4 bytes
 ```
+
+If every valid pixel has the same elevation, all valid pixels are written as `0` because the normalization span is zero.
 
 ## Go module
 
