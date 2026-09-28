@@ -135,6 +135,7 @@ func TestReadRejectsMalformedHeader(t *testing.T) {
 		{name: "zero height", input: rawHeader(magicValue, 0, 1), want: ErrInvalidDimensions},
 		{name: "negative width", input: rawHeader(magicValue, 1, -1), want: ErrInvalidDimensions},
 		{name: "size overflow", input: rawHeader(magicValue, math.MaxInt32, math.MaxInt32), want: ErrInvalidDimensions},
+		{name: "exceeds allocation limit", input: rawHeader(magicValue, 1<<30, 1<<29), want: ErrInvalidDimensions},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

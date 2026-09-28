@@ -1,8 +1,19 @@
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use clap::Parser;
-use dem2hm::{Rotation, Transform, convert};
+use clap::{Parser, ValueEnum};
+use dem2hm::{HeightMap16Options, Rotation, Transform, write_heightmap, write_heightmap16};
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, ValueEnum)]
+enum Format {
+    /// Normalized int32 pixels (frozen version 1)
+    #[value(name = "1")]
+    V1,
+    /// int16 meters with georeference and provenance metadata
+    #[default]
+    #[value(name = "1.1")]
+    V1_1,
+}
 
 #[derive(Debug, Parser)]
 #[command(
@@ -16,6 +27,10 @@ struct Arguments {
     /// Output heightmap file
     output: PathBuf,
 
+    /// Heightmap format version to write
+    #[arg(long, value_enum, default_value_t)]
+    format: Format,
+
     /// Clockwise rotation in degrees
     #[arg(long, value_enum, default_value_t)]
     rotate: Rotation,
@@ -27,6 +42,10 @@ struct Arguments {
     /// Flip the rotated raster top-to-bottom
     #[arg(long)]
     flip_vertical: bool,
+
+    /// Vertical datum to record when the GeoTIFF does not declare one (format 1.1 only)
+    #[arg(long, value_name = "NAME")]
+    vertical_datum: Option<String>,
 }
 
 fn main() -> ExitCode {
@@ -37,7 +56,21 @@ fn main() -> ExitCode {
         flip_vertical: arguments.flip_vertical,
     };
 
-    match convert(&arguments.input, &arguments.output, transform) {
+    let result = match arguments.format {
+        Format::V1 if arguments.vertical_datum.is_some() => {
+            Err("--vertical-datum requires --format 1.1".into())
+        }
+        Format::V1 => write_heightmap(&arguments.input, &arguments.output, transform),
+        Format::V1_1 => write_heightmap16(
+            &arguments.input,
+            &arguments.output,
+            &HeightMap16Options {
+                transform,
+                vertical_datum: arguments.vertical_datum,
+            },
+        ),
+    };
+    match result {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
             eprintln!("dem2hm: {error}");
