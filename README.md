@@ -4,26 +4,44 @@
 
 ## Usage
 
+Run the application through Cargo from the repository root:
+
+```text
+cargo run --release -- [OPTIONS] <INPUT> <OUTPUT>
+```
+
+After installing it with `cargo install --path .`, invoke the executable directly:
+
 ```text
 dem2hm [OPTIONS] <INPUT> <OUTPUT>
 ```
 
 The input must be a single-image, single-band GeoTIFF with signed 8-, 16-, 32-, or 64-bit integer samples. If the GeoTIFF declares a `GDAL_NODATA` value, those pixels are encoded with the heightmap no-data sentinel and excluded when finding the normalization range.
 
+Arguments:
+
+- `<INPUT>` is the source GeoTIFF DEM.
+- `<OUTPUT>` is the heightmap file to create. Its parent directory must already exist.
+
 Options:
 
 - `--rotate <0|90|180|270>` rotates clockwise. The default is `0`.
 - `--flip-horizontal` flips the rotated raster left-to-right.
 - `--flip-vertical` flips the rotated raster top-to-bottom.
+- `-h`, `--help` prints command-line help.
+- `-V`, `--version` prints the application version.
 
 Rotation is applied first. Flips are then applied in output coordinates, so they always describe the final image's horizontal and vertical axes.
 
-For example:
+### Panama DEM
+
+From the repository root, this exact command reads `../dem/Pma_DEM_30m.tif`, rotates it 90 degrees clockwise, flips the rotated image vertically, and writes `../var/pandemokh.hm`:
 
 ```sh
-cargo run --release -- ../dem/Pma_DEM_30m.tif ../var/Pma_DEM_30m.hm
-cargo run --release -- --rotate 90 --flip-horizontal input.tif output.hm
+cargo run --release -- --rotate 90 --flip-vertical ../dem/Pma_DEM_30m.tif ../var/pandemokh.hm
 ```
+
+The `../var` directory must exist before running the command.
 
 The converter scans the TIFF once to find valid minimum and maximum elevations, then decodes and writes one TIFF strip or tile at a time. It does not load the complete raster into memory.
 
