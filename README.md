@@ -45,7 +45,9 @@ The `../var` directory must exist before running the command.
 
 The converter scans the TIFF once to find valid minimum and maximum elevations, then decodes and transforms one TIFF strip or tile at a time into a temporary payload. It finally streams that payload through gzip into the output file. It does not load the complete raster into memory.
 
-## Heightmap format, version 1
+## Heightmap format, version 1 (frozen)
+
+The version 1 wire format is frozen. Existing version 1 files will not be reinterpreted if the format evolves; an incompatible future format will use a new version and magic value.
 
 The output is a raw 12-byte header followed immediately by one gzip member containing an `int32` for every output pixel:
 

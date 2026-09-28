@@ -10,7 +10,9 @@ The current Go reader is an incomplete implementation fragment and is not expect
 
 ## Heightmap binary contract
 
-The output format is version 1. It has a raw header followed by a gzip-compressed payload:
+The output format is version 1 and is **frozen**. Writers and readers must preserve this contract. Any incompatible future change requires a new format version and a new magic value; never reinterpret a version 1 file under a changed contract.
+
+Version 1 has a raw header followed by a gzip-compressed payload:
 
 | Byte offset | Type | Meaning |
 | ---: | --- | --- |
