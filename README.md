@@ -35,10 +35,10 @@ Rotation is applied first. Flips are then applied in output coordinates, so they
 
 ### Panama DEM
 
-From the repository root, this exact command reads `../dem/Pma_DEM_30m.tif`, rotates it 90 degrees clockwise, flips the rotated image vertically, and writes `../var/pandemokh.hmz`:
+From the repository root, this exact command reads `../dem/Pma_DEM_30m.tif`, rotates it 90 degrees clockwise and writes `../var/pandemokh.hmz`:
 
 ```sh
-cargo run --release -- --rotate 90 --flip-vertical ../dem/Pma_DEM_30m.tif ../var/pandemokh.hmz
+cargo run --release -- --rotate 90 ../dem/Pma_DEM_30m.tif ../var/pandemokh.hmz
 ```
 
 The `../var` directory must exist before running the command.
