@@ -65,7 +65,7 @@ The output is an 8-byte raw header, a UTF-8 JSON metadata block, and one gzip me
 | 8 | UTF-8 JSON | Metadata object, exactly `n` bytes |
 | 8 + `n` | gzip stream | `height * width` `int16` elevations in meters |
 
-Every integer in the raw header and decompressed payload uses **little-endian** two's-complement byte order, so the file starts with bytes `FE AA 08 01`. The gzip stream starts immediately after the metadata with bytes `1F 8B`. Pixel data is row-major, as in version 1: pixel `(x, y)` is sample `y * width + x`. The decompressed payload is exactly `height * width * 2` bytes.
+Every integer in the raw header and decompressed payload uses **little-endian** two's-complement byte order, so the file starts with bytes `FE AA 08 01`. The gzip stream starts immediately after the metadata with bytes `1F 8B`. Pixel data is row-major, as in version 1: pixel `(x, y)` is sample `y * width + x`. The decompressed payload is exactly `height * width * 2` bytes. The gzip header uses a zero modification time, as in version 1, so repeated conversions of identical input give identical files.
 
 Elevations are the source values, unscaled. Sea level is `0`, so a pixel is above sea level when its value is `> 0`. The reserved value `-32768` marks a no-data pixel: one **outside the source data**. It does not mean sea. A DEM cut to a political border uses no-data for neighboring land too, so each application decides whether no-data is sea, off-map land or something else.
 
@@ -94,12 +94,12 @@ The metadata is one JSON object. The converter writes keys in the order shown, i
 | --- | --- |
 | `height`, `width` | Output raster dimensions; positive `int32` values. |
 | `elevation.minimum`, `elevation.maximum` | Range of valid elevations in meters. |
-| `elevation.vertical_datum` | The GeoTIFF's vertical coordinate system as `EPSG:<code>` or its citation, else the `--vertical-datum` value, else `null`. |
-| `pixel_size_m` | Nominal ground size of one pixel in meters: the north–south size at the source's center latitude on the WGS 84 ellipsoid. East–west size is smaller by the cosine of the latitude. |
+| `elevation.vertical_datum` | The first of these that is present: the GeoTIFF's `VerticalCSTypeGeoKey` (4096) as `EPSG:<code>`; its `VerticalCitationGeoKey` (4097) text, unchanged; its `VerticalDatumGeoKey` (4098) as `EPSG:<code>`; the `--vertical-datum` value; else `null`. A code key counts as present only if it isn't `0` or `32767` (user-defined). |
+| `pixel_size_m` | Nominal ground size of one pixel in meters: the north–south size at the source's center latitude on the WGS 84 ellipsoid, which is the absolute value of `g[5]`, in radians, times the meridional radius of curvature there. The center latitude is that of the middle of the source's extent, `g[3] + g[5] * source.height / 2`, using `source.geotransform`. East–west size is smaller by the cosine of the latitude. |
 | `source.file_name`, `source.sha256` | Base name and lowercase hex SHA-256 of the source file. |
 | `source.width`, `source.height` | Source raster dimensions. |
 | `source.no_data` | Source `GDAL_NODATA` value, or `null` if none was declared. |
-| `source.geotransform` | GDAL-style affine transform from the top-left **corner** of source pixel `(column, row)` to degrees: `lon = g[0] + column * g[1] + row * g[2]`, `lat = g[3] + column * g[4] + row * g[5]`. A `PixelIsPoint` GeoTIFF is shifted by half a pixel to this convention. |
+| `source.geotransform` | GDAL-style affine transform from the top-left **corner** of source pixel `(column, row)` to degrees: `lon = g[0] + column * g[1] + row * g[2]`, `lat = g[3] + column * g[4] + row * g[5]`. A `PixelIsPoint` GeoTIFF (`GTRasterTypeGeoKey` 1025 = 2) is shifted by half a pixel to this convention: `g[0] - g[1] / 2` and `g[3] - g[5] / 2`. |
 | `transform.rotate` | Clockwise rotation in degrees: `0`, `90`, `180` or `270`. |
 | `transform.flip_horizontal`, `transform.flip_vertical` | Flips applied after rotation, in output coordinates. |
 | `dem2hm_version` | Version of the converter that wrote the file. |
